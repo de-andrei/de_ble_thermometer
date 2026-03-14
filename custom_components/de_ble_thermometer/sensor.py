@@ -66,8 +66,11 @@ class TemperatureSensor(SensorEntity, RestoreEntity):
         
         if (last_state := await self.async_get_last_state()) is not None:
             try:
-                self._attr_native_value = float(last_state.state)
-                _LOGGER.debug(f"Restored {self.entity_id} = {self._attr_native_value}")
+                restored_value = float(last_state.state)
+                # Проверяем, что восстановленное значение в разумных пределах
+                if 25.0 <= restored_value <= 45.0:
+                    self._attr_native_value = restored_value
+                    _LOGGER.debug(f"Restored {self.entity_id} = {self._attr_native_value}")
             except (ValueError, TypeError):
                 _LOGGER.debug("Could not restore state for %s", self.entity_id)
         
@@ -75,12 +78,15 @@ class TemperatureSensor(SensorEntity, RestoreEntity):
         def update(source: str, data: Any) -> None:
             """Update state."""
             if source == "temperature":
-                if not self._received_first_update and data == 0.0:
+                # Если это первое обновление, обновляем всегда (даже если 0)
+                if not self._received_first_update:
+                    self._attr_native_value = data
                     self._received_first_update = True
-                    return
-                self._attr_native_value = data
-                self._received_first_update = True
-                self.async_write_ha_state()
+                    self.async_write_ha_state()
+                # Если не первое обновление, обновляем только если значение изменилось
+                elif self._attr_native_value != data:
+                    self._attr_native_value = data
+                    self.async_write_ha_state()
         
         self._async_unsub_dispatcher = async_dispatcher_connect(
             self.hass, f"{DOMAIN}_{self.coordinator.entry_id}_update", update
@@ -126,8 +132,11 @@ class BatterySensor(SensorEntity, RestoreEntity):
         
         if (last_state := await self.async_get_last_state()) is not None:
             try:
-                self._attr_native_value = int(float(last_state.state))
-                _LOGGER.debug(f"Restored {self.entity_id} = {self._attr_native_value}")
+                restored_value = int(float(last_state.state))
+                # Проверяем, что восстановленное значение в разумных пределах
+                if 0 <= restored_value <= 100:
+                    self._attr_native_value = restored_value
+                    _LOGGER.debug(f"Restored {self.entity_id} = {self._attr_native_value}")
             except (ValueError, TypeError):
                 _LOGGER.debug("Could not restore state for %s", self.entity_id)
         
@@ -135,12 +144,16 @@ class BatterySensor(SensorEntity, RestoreEntity):
         def update(source: str, data: Any) -> None:
             """Update state."""
             if source == "battery":
-                if not self._received_first_update and data == 0:
-                    self._received_first_update = True
-                    return
-                self._attr_native_value = data
-                self._received_first_update = True
-                self.async_write_ha_state()
+                # Если это первое обновление, обновляем всегда
+                if not self._received_first_update:
+                    if 0 <= data <= 100:  # Проверяем, что данные валидны
+                        self._attr_native_value = data
+                        self._received_first_update = True
+                        self.async_write_ha_state()
+                # Если не первое обновление, обновляем только если значение изменилось
+                elif self._attr_native_value != data and 0 <= data <= 100:
+                    self._attr_native_value = data
+                    self.async_write_ha_state()
         
         self._async_unsub_dispatcher = async_dispatcher_connect(
             self.hass, f"{DOMAIN}_{self.coordinator.entry_id}_update", update
