@@ -38,7 +38,7 @@ class RelsibWT50:
         self._battery: int = 0
         self._block_until: int = 0
         self._callback: Optional[Callable[[str, Any], None]] = None
-        self._battery_received = False  # Флаг получения батареи
+        self._battery_read_task: Optional[asyncio.Task] = None
         
     def set_callback(self, callback: Callable[[str, Any], None]) -> None:
         """Set callback for data updates."""
@@ -51,31 +51,25 @@ class RelsibWT50:
     def _temp_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle temperature notifications."""
         try:
-            # Проверяем размер данных как в ESPHome
             if len(data) != 5:
                 return
             
             flags = data[0]
             fahrenheit = (flags & 0x01) == 0x01
             
-            # Извлекаем мантиссу как в ESPHome
             mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
             exponent = data[4]
             
-            # Преобразуем exponent из signed byte как в ESPHome
             if exponent > 127:
                 exponent = exponent - 256
             
-            # Вычисляем температуру как в ESPHome
             temperature = mantissa * (10 ** exponent)
             
             if fahrenheit:
                 temperature = (temperature - 32) * 5.0 / 9.0
             
-            # Округляем до 1 знака как в ESPHome
             temperature = round(temperature, 1)
             
-            # Проверяем разумный диапазон
             if MIN_TEMP <= temperature <= MAX_TEMP:
                 self._temperature = temperature
                 if self._callback:
@@ -85,27 +79,47 @@ class RelsibWT50:
             pass
     
     def _battery_notification_handler(self, sender: int, data: bytearray) -> None:
-        """Handle battery notifications exactly as in ESPHome."""
+        """Handle battery notifications if they arrive."""
         try:
-            # ESPHome: if (x.size() == 1)
             if len(data) == 1:
-                battery = data[0]  # ESPHome: x[0]
-                
-                # ESPHome: просто публикует значение
-                if 0 <= battery <= 100:
+                battery = data[0]
+                if 0 <= battery <= 100 and battery != self._battery:
                     self._battery = battery
-                    self._battery_received = True
                     if self._callback:
                         self._callback("battery", battery)
-                    _LOGGER.debug(f"Battery received: {battery}%")
-            
+        except Exception:
+            pass
+    
+    async def _read_battery_periodically(self) -> None:
+        """Periodically read battery level."""
+        try:
+            while self.client and self.client.is_connected:
+                try:
+                    # Читаем батарею
+                    battery_data = await self.client.read_gatt_char(BATTERY_CHAR_UUID)
+                    if len(battery_data) == 1:
+                        battery = battery_data[0]
+                        if 0 <= battery <= 100 and battery != self._battery:
+                            self._battery = battery
+                            if self._callback:
+                                self._callback("battery", battery)
+                except Exception:
+                    pass
+                
+                # Ждем 60 секунд перед следующим чтением
+                await asyncio.sleep(60)
+                
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
     
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
         self.client = None
-        self._battery_received = False
+        if self._battery_read_task:
+            self._battery_read_task.cancel()
+            self._battery_read_task = None
         if self._callback:
             self._callback("disconnected", None)
     
@@ -126,16 +140,34 @@ class RelsibWT50:
             
             await self.client.connect(timeout=8.0)
             
-            # Подписываемся на уведомления температуры (как в ESPHome)
+            # Подписываемся на уведомления температуры
             await self.client.start_notify(
                 TEMP_CHAR_UUID,
                 self._temp_notification_handler
             )
             
-            # Подписываемся на уведомления батареи (как в ESPHome)
-            await self.client.start_notify(
-                BATTERY_CHAR_UUID,
-                self._battery_notification_handler
+            # Подписываемся на уведомления батареи (на всякий случай)
+            try:
+                await self.client.start_notify(
+                    BATTERY_CHAR_UUID,
+                    self._battery_notification_handler
+                )
+            except Exception:
+                pass  # Некоторые устройства не поддерживают уведомления для батареи
+            
+            # Принудительно читаем батарею сразу после подключения
+            try:
+                battery_data = await self.client.read_gatt_char(BATTERY_CHAR_UUID)
+                if len(battery_data) == 1:
+                    self._battery = battery_data[0]
+                    if self._callback:
+                        self._callback("battery", self._battery)
+            except Exception:
+                pass
+            
+            # Запускаем периодическое чтение батареи
+            self._battery_read_task = asyncio.create_task(
+                self._read_battery_periodically()
             )
             
             if self._callback:
@@ -149,16 +181,22 @@ class RelsibWT50:
     
     async def async_disconnect(self) -> None:
         """Disconnect from thermometer."""
+        if self._battery_read_task:
+            self._battery_read_task.cancel()
+            self._battery_read_task = None
+            
         if self.client and self.client.is_connected:
             try:
                 await self.client.stop_notify(TEMP_CHAR_UUID)
-                await self.client.stop_notify(BATTERY_CHAR_UUID)
+                try:
+                    await self.client.stop_notify(BATTERY_CHAR_UUID)
+                except Exception:
+                    pass
                 await self.client.disconnect()
             except Exception:
                 pass
             finally:
                 self.client = None
-                self._battery_received = False
                 if self._callback:
                     self._callback("disconnected", None)
     
@@ -171,11 +209,6 @@ class RelsibWT50:
     def battery(self) -> int:
         """Current battery level (%)."""
         return self._battery
-    
-    @property
-    def battery_received(self) -> bool:
-        """Whether battery value was received."""
-        return self._battery_received
     
     @property
     def connected(self) -> bool:
