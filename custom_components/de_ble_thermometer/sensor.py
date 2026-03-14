@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN
 
@@ -36,7 +37,7 @@ async def async_setup_entry(
         ConnectionSensor(coordinator, entry),
     ])
 
-class TemperatureSensor(SensorEntity):
+class TemperatureSensor(SensorEntity, RestoreEntity):
     """Representation of temperature sensor."""
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -56,16 +57,29 @@ class TemperatureSensor(SensorEntity):
             identifiers={(DOMAIN, coordinator.address)},
         )
         self._async_unsub_dispatcher = None
+        self._attr_native_value = 0.0
+        self._received_first_update = False
 
     async def async_added_to_hass(self) -> None:
-        """Run when entity about to be added."""
+        """Restore last state."""
         await super().async_added_to_hass()
+        
+        if (last_state := await self.async_get_last_state()) is not None:
+            try:
+                self._attr_native_value = float(last_state.state)
+                _LOGGER.debug(f"Restored {self.entity_id} = {self._attr_native_value}")
+            except (ValueError, TypeError):
+                _LOGGER.debug("Could not restore state for %s", self.entity_id)
         
         @callback
         def update(source: str, data: Any) -> None:
             """Update state."""
             if source == "temperature":
+                if not self._received_first_update and data == 0.0:
+                    self._received_first_update = True
+                    return
                 self._attr_native_value = data
+                self._received_first_update = True
                 self.async_write_ha_state()
         
         self._async_unsub_dispatcher = async_dispatcher_connect(
@@ -81,9 +95,9 @@ class TemperatureSensor(SensorEntity):
     @property
     def native_value(self) -> float:
         """Return the state."""
-        return self.coordinator.temperature
+        return self._attr_native_value
 
-class BatterySensor(SensorEntity):
+class BatterySensor(SensorEntity, RestoreEntity):
     """Representation of battery sensor."""
 
     _attr_device_class = SensorDeviceClass.BATTERY
@@ -103,16 +117,29 @@ class BatterySensor(SensorEntity):
             identifiers={(DOMAIN, coordinator.address)},
         )
         self._async_unsub_dispatcher = None
+        self._attr_native_value = 0
+        self._received_first_update = False
 
     async def async_added_to_hass(self) -> None:
-        """Run when entity about to be added."""
+        """Restore last state."""
         await super().async_added_to_hass()
+        
+        if (last_state := await self.async_get_last_state()) is not None:
+            try:
+                self._attr_native_value = int(float(last_state.state))
+                _LOGGER.debug(f"Restored {self.entity_id} = {self._attr_native_value}")
+            except (ValueError, TypeError):
+                _LOGGER.debug("Could not restore state for %s", self.entity_id)
         
         @callback
         def update(source: str, data: Any) -> None:
             """Update state."""
             if source == "battery":
+                if not self._received_first_update and data == 0:
+                    self._received_first_update = True
+                    return
                 self._attr_native_value = data
+                self._received_first_update = True
                 self.async_write_ha_state()
         
         self._async_unsub_dispatcher = async_dispatcher_connect(
@@ -128,7 +155,7 @@ class BatterySensor(SensorEntity):
     @property
     def native_value(self) -> int:
         """Return the state."""
-        return self.coordinator.battery
+        return self._attr_native_value
 
 class ConnectionSensor(SensorEntity):
     """Representation of connection status."""
