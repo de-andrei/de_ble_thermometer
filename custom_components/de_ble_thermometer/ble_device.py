@@ -48,43 +48,49 @@ class RelsibWT50:
         """Handle temperature notifications."""
         try:
             # Логируем сырые данные для отладки
-            _LOGGER.debug(f"Raw temperature data: {data.hex()}")
+            _LOGGER.debug(f"Raw temperature data: {data.hex()} from sender {sender}")
             
-            # Проверяем размер данных как в ESPHome конфиге
-            if len(data) == 5:
-                flags = data[0]
-                fahrenheit = (flags & 0x01) == 0x01
-                
-                # Извлекаем мантиссу (24 бита) как в ESPHome
-                mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
-                exponent = data[4]
-                
-                _LOGGER.debug(f"Flags: {flags:02x}, Mantissa: {mantissa}, Exponent: {exponent}")
-                
-                # Преобразуем exponent из signed byte
-                if exponent >= 128:  # отрицательное число
-                    exponent = exponent - 256
-                
-                # Вычисляем температуру
-                temperature = mantissa * math.pow(10, exponent)
-                
-                if fahrenheit:
-                    temperature = (temperature - 32) * 5.0 / 9.0
-                
-                # Округляем до 1 знака
-                temperature = round(temperature, 1)
-                
-                _LOGGER.debug(f"Calculated temperature: {temperature}°C")
-                
-                # Проверяем разумный диапазон для температуры тела
-                if 25.0 <= temperature <= 45.0:
-                    self._temperature = temperature
-                    if self._callback:
-                        self._callback("temperature", temperature)
-                else:
-                    _LOGGER.warning(f"Temperature out of range: {temperature}°C")
+            # Проверяем размер данных
+            if len(data) != 5:
+                _LOGGER.warning(f"Unexpected data length: {len(data)} bytes, ignoring")
+                return
+            
+            flags = data[0]
+            fahrenheit = (flags & 0x01) == 0x01
+            
+            # Извлекаем мантиссу (24 бита)
+            mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
+            exponent = data[4]
+            
+            _LOGGER.debug(f"Flags: {flags:02x}, Mantissa: {mantissa}, Exponent: {exponent}")
+            
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: если мантисса больше 10000 - это явно не температура
+            if mantissa > 10000:
+                _LOGGER.warning(f"Mantissa too large: {mantissa}, ignoring packet")
+                return
+            
+            # Преобразуем exponent из signed byte
+            if exponent >= 128:  # отрицательное число
+                exponent = exponent - 256
+            
+            # Вычисляем температуру
+            temperature = mantissa * math.pow(10, exponent)
+            
+            if fahrenheit:
+                temperature = (temperature - 32) * 5.0 / 9.0
+            
+            # Округляем до 1 знака
+            temperature = round(temperature, 1)
+            
+            _LOGGER.debug(f"Calculated temperature: {temperature}°C")
+            
+            # Проверяем разумный диапазон для температуры тела
+            if 25.0 <= temperature <= 45.0:
+                self._temperature = temperature
+                if self._callback:
+                    self._callback("temperature", temperature)
             else:
-                _LOGGER.warning(f"Unexpected data length: {len(data)} bytes")
+                _LOGGER.warning(f"Temperature out of range: {temperature}°C")
                     
         except Exception as e:
             _LOGGER.error(f"Error parsing temperature: {e}")
@@ -92,15 +98,20 @@ class RelsibWT50:
     def _battery_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle battery notifications."""
         try:
-            _LOGGER.debug(f"Raw battery data: {data.hex()}")
-            if len(data) == 1:
-                battery = data[0]
-                if 0 <= battery <= 100:
-                    self._battery = battery
-                    if self._callback:
-                        self._callback("battery", battery)
-                else:
-                    _LOGGER.warning(f"Battery out of range: {battery}")
+            _LOGGER.debug(f"Raw battery data: {data.hex()} from sender {sender}")
+            
+            if len(data) != 1:
+                _LOGGER.warning(f"Unexpected battery data length: {len(data)} bytes")
+                return
+                
+            battery = data[0]
+            if 0 <= battery <= 100:
+                self._battery = battery
+                if self._callback:
+                    self._callback("battery", battery)
+            else:
+                _LOGGER.warning(f"Battery out of range: {battery}")
+                
         except Exception as e:
             _LOGGER.error(f"Error parsing battery: {e}")
     
