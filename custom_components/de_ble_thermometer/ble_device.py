@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import math
+import struct
 from typing import Optional, Callable, Any, Union
 
 from bleak import BleakClient, BleakScanner
@@ -16,6 +16,10 @@ TEMP_SERVICE_UUID = "00001809-0000-1000-8000-00805f9b34fb"
 TEMP_CHAR_UUID = "00002a1e-0000-1000-8000-00805f9b34fb"
 BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb"
 BATTERY_CHAR_UUID = "00002a19-0000-1000-8000-00805f9b34fb"
+
+# Диапазон температур тела человека (25-45°C)
+MIN_TEMP = 25.0
+MAX_TEMP = 45.0
 
 class RelsibWT50:
     """Relsib WT50 Thermometer interface."""
@@ -53,13 +57,14 @@ class RelsibWT50:
             flags = data[0]
             fahrenheit = (flags & 0x01) == 0x01
             
-            # Извлекаем мантиссу (24 бита) - просто как в ESPHome
+            # Извлекаем мантиссу (24 бита)
             mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
-            exponent = data[4]
+            exponent = struct.unpack_from('b', data, 4)[0]  # signed byte
             
-            # Преобразуем exponent из signed byte
-            if exponent > 127:
-                exponent = exponent - 256
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: мантисса не должна быть огромной
+            # Нормальная температура 25-45°C дает мантиссу ~250-450
+            if mantissa > 5000:  # Если мантисса слишком большая - игнорируем
+                return
             
             # Вычисляем температуру
             temperature = mantissa * (10 ** exponent)
@@ -70,8 +75,8 @@ class RelsibWT50:
             # Округляем до 1 знака
             temperature = round(temperature, 1)
             
-            # Жесткая проверка: только температуры от 25 до 45 градусов
-            if 25.0 <= temperature <= 45.0:
+            # ФИНАЛЬНАЯ ПРОВЕРКА: только температуры от 25 до 45 градусов
+            if MIN_TEMP <= temperature <= MAX_TEMP:
                 self._temperature = temperature
                 if self._callback:
                     self._callback("temperature", temperature)
