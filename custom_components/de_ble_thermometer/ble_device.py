@@ -9,7 +9,8 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 
 _LOGGER = logging.getLogger(__name__)
-_LOGGER.setLevel(logging.WARNING)
+# Временно включаем отладку для поиска проблемы
+_LOGGER.setLevel(logging.DEBUG)
 
 # UUIDs
 TEMP_SERVICE_UUID = "00001809-0000-1000-8000-00805f9b34fb"
@@ -46,6 +47,9 @@ class RelsibWT50:
     def _temp_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle temperature notifications."""
         try:
+            # Логируем сырые данные для отладки
+            _LOGGER.debug(f"Raw temperature data: {data.hex()}")
+            
             # Проверяем размер данных как в ESPHome конфиге
             if len(data) == 5:
                 flags = data[0]
@@ -54,6 +58,8 @@ class RelsibWT50:
                 # Извлекаем мантиссу (24 бита) как в ESPHome
                 mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
                 exponent = data[4]
+                
+                _LOGGER.debug(f"Flags: {flags:02x}, Mantissa: {mantissa}, Exponent: {exponent}")
                 
                 # Преобразуем exponent из signed byte
                 if exponent >= 128:  # отрицательное число
@@ -68,31 +74,39 @@ class RelsibWT50:
                 # Округляем до 1 знака
                 temperature = round(temperature, 1)
                 
+                _LOGGER.debug(f"Calculated temperature: {temperature}°C")
+                
                 # Проверяем разумный диапазон для температуры тела
                 if 25.0 <= temperature <= 45.0:
                     self._temperature = temperature
                     if self._callback:
                         self._callback("temperature", temperature)
                 else:
-                    _LOGGER.debug(f"Temperature out of range: {temperature}")
+                    _LOGGER.warning(f"Temperature out of range: {temperature}°C")
+            else:
+                _LOGGER.warning(f"Unexpected data length: {len(data)} bytes")
                     
         except Exception as e:
-            _LOGGER.debug(f"Error parsing temperature: {e}")
+            _LOGGER.error(f"Error parsing temperature: {e}")
     
     def _battery_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle battery notifications."""
         try:
+            _LOGGER.debug(f"Raw battery data: {data.hex()}")
             if len(data) == 1:
                 battery = data[0]
                 if 0 <= battery <= 100:
                     self._battery = battery
                     if self._callback:
                         self._callback("battery", battery)
-        except Exception:
-            pass
+                else:
+                    _LOGGER.warning(f"Battery out of range: {battery}")
+        except Exception as e:
+            _LOGGER.error(f"Error parsing battery: {e}")
     
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
+        _LOGGER.debug("Device disconnected")
         self.client = None
         if self._callback:
             self._callback("disconnected", None)
@@ -101,18 +115,22 @@ class RelsibWT50:
         """Connect to thermometer and enable notifications."""
         try:
             if not self.ble_device:
+                _LOGGER.debug(f"Scanning for device {self.address}")
                 self.ble_device = await BleakScanner.find_device_by_address(
                     self.address, timeout=3.0
                 )
                 if not self.ble_device:
+                    _LOGGER.debug(f"Device {self.address} not found")
                     return False
             
+            _LOGGER.debug(f"Connecting to {self.address}")
             self.client = BleakClient(
                 self.ble_device,
                 disconnected_callback=self._disconnected_callback
             )
             
             await self.client.connect(timeout=8.0)
+            _LOGGER.debug("Connected, enabling notifications")
             
             # Подписываемся на уведомления температуры
             await self.client.start_notify(
@@ -132,7 +150,7 @@ class RelsibWT50:
             return True
             
         except Exception as e:
-            _LOGGER.debug(f"Connection error: {e}")
+            _LOGGER.error(f"Connection error: {e}")
             self.client = None
             return False
     
@@ -140,11 +158,12 @@ class RelsibWT50:
         """Disconnect from thermometer."""
         if self.client and self.client.is_connected:
             try:
+                _LOGGER.debug("Disconnecting")
                 await self.client.stop_notify(TEMP_CHAR_UUID)
                 await self.client.stop_notify(BATTERY_CHAR_UUID)
                 await self.client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                _LOGGER.error(f"Disconnect error: {e}")
             finally:
                 self.client = None
                 if self._callback:
@@ -174,6 +193,7 @@ class RelsibWT50:
             if advertisement_data and advertisement_data.service_uuids:
                 if TEMP_SERVICE_UUID in advertisement_data.service_uuids:
                     devices.append(device)
+                    _LOGGER.debug(f"Found thermometer: {device.address}")
         
         scanner = BleakScanner(detection_callback)
         await scanner.start()
