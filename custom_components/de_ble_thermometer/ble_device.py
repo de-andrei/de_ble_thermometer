@@ -38,6 +38,7 @@ class RelsibWT50:
         self._battery: int = 0
         self._block_until: int = 0
         self._callback: Optional[Callable[[str, Any], None]] = None
+        self._battery_received = False  # Флаг получения батареи
         
     def set_callback(self, callback: Callable[[str, Any], None]) -> None:
         """Set callback for data updates."""
@@ -50,31 +51,31 @@ class RelsibWT50:
     def _temp_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle temperature notifications."""
         try:
-            # Проверяем размер данных
+            # Проверяем размер данных как в ESPHome
             if len(data) != 5:
                 return
             
             flags = data[0]
             fahrenheit = (flags & 0x01) == 0x01
             
-            # Извлекаем мантиссу (24 бита)
+            # Извлекаем мантиссу как в ESPHome
             mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
-            exponent = struct.unpack_from('b', data, 4)[0]  # signed byte
+            exponent = data[4]
             
-            # Критическая проверка: мантисса не должна быть огромной
-            if mantissa > 5000:
-                return
+            # Преобразуем exponent из signed byte как в ESPHome
+            if exponent > 127:
+                exponent = exponent - 256
             
-            # Вычисляем температуру
+            # Вычисляем температуру как в ESPHome
             temperature = mantissa * (10 ** exponent)
             
             if fahrenheit:
                 temperature = (temperature - 32) * 5.0 / 9.0
             
-            # Округляем до 1 знака
+            # Округляем до 1 знака как в ESPHome
             temperature = round(temperature, 1)
             
-            # Финальная проверка: только температуры от 25 до 45 градусов
+            # Проверяем разумный диапазон
             if MIN_TEMP <= temperature <= MAX_TEMP:
                 self._temperature = temperature
                 if self._callback:
@@ -84,21 +85,19 @@ class RelsibWT50:
             pass
     
     def _battery_notification_handler(self, sender: int, data: bytearray) -> None:
-        """Handle battery notifications."""
+        """Handle battery notifications exactly as in ESPHome."""
         try:
-            # Проверяем размер данных
-            if len(data) != 1:
-                return
-            
-            battery = data[0]
-            
-            # Проверяем, что значение в разумных пределах (0-100%)
-            if 0 <= battery <= 100:
-                # Обновляем только если значение изменилось или это первое значение
-                if self._battery != battery:
+            # ESPHome: if (x.size() == 1)
+            if len(data) == 1:
+                battery = data[0]  # ESPHome: x[0]
+                
+                # ESPHome: просто публикует значение
+                if 0 <= battery <= 100:
                     self._battery = battery
+                    self._battery_received = True
                     if self._callback:
                         self._callback("battery", battery)
+                    _LOGGER.debug(f"Battery received: {battery}%")
             
         except Exception:
             pass
@@ -106,6 +105,7 @@ class RelsibWT50:
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
         self.client = None
+        self._battery_received = False
         if self._callback:
             self._callback("disconnected", None)
     
@@ -126,13 +126,13 @@ class RelsibWT50:
             
             await self.client.connect(timeout=8.0)
             
-            # Подписываемся на уведомления температуры
+            # Подписываемся на уведомления температуры (как в ESPHome)
             await self.client.start_notify(
                 TEMP_CHAR_UUID,
                 self._temp_notification_handler
             )
             
-            # Подписываемся на уведомления батареи
+            # Подписываемся на уведомления батареи (как в ESPHome)
             await self.client.start_notify(
                 BATTERY_CHAR_UUID,
                 self._battery_notification_handler
@@ -158,6 +158,7 @@ class RelsibWT50:
                 pass
             finally:
                 self.client = None
+                self._battery_received = False
                 if self._callback:
                     self._callback("disconnected", None)
     
@@ -170,6 +171,11 @@ class RelsibWT50:
     def battery(self) -> int:
         """Current battery level (%)."""
         return self._battery
+    
+    @property
+    def battery_received(self) -> bool:
+        """Whether battery value was received."""
+        return self._battery_received
     
     @property
     def connected(self) -> bool:
