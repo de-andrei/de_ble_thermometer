@@ -61,9 +61,8 @@ class RelsibWT50:
             mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
             exponent = struct.unpack_from('b', data, 4)[0]  # signed byte
             
-            # КРИТИЧЕСКАЯ ПРОВЕРКА: мантисса не должна быть огромной
-            # Нормальная температура 25-45°C дает мантиссу ~250-450
-            if mantissa > 5000:  # Если мантисса слишком большая - игнорируем
+            # Критическая проверка: мантисса не должна быть огромной
+            if mantissa > 5000:
                 return
             
             # Вычисляем температуру
@@ -75,7 +74,7 @@ class RelsibWT50:
             # Округляем до 1 знака
             temperature = round(temperature, 1)
             
-            # ФИНАЛЬНАЯ ПРОВЕРКА: только температуры от 25 до 45 градусов
+            # Финальная проверка: только температуры от 25 до 45 градусов
             if MIN_TEMP <= temperature <= MAX_TEMP:
                 self._temperature = temperature
                 if self._callback:
@@ -87,14 +86,24 @@ class RelsibWT50:
     def _battery_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle battery notifications."""
         try:
-            if len(data) == 1:
-                battery = data[0]
-                if 0 <= battery <= 100:
-                    self._battery = battery
-                    if self._callback:
-                        self._callback("battery", battery)
-        except Exception:
-            pass
+            # Проверяем размер данных
+            if len(data) != 1:
+                _LOGGER.debug(f"Battery data length: {len(data)}")
+                return
+            
+            battery = data[0]
+            _LOGGER.debug(f"Raw battery value: {battery}")
+            
+            # Проверяем, что значение в разумных пределах
+            if 0 <= battery <= 100:
+                self._battery = battery
+                if self._callback:
+                    self._callback("battery", battery)
+            else:
+                _LOGGER.debug(f"Battery out of range: {battery}")
+                
+        except Exception as e:
+            _LOGGER.debug(f"Battery error: {e}")
     
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
