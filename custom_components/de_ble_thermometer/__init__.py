@@ -129,6 +129,7 @@ class ThermometerCoordinator:
         elif source == "disconnected":
             self._connected = False
             self._connecting = False
+            # НЕ обнуляем данные, только отправляем статус
             async_dispatcher_send(
                 self.hass, f"{DOMAIN}_{self.entry_id}_update", "disconnected", None
             )
@@ -139,7 +140,7 @@ class ThermometerCoordinator:
             return
         
         # Проверяем блокировку
-        now_ms = asyncio.get_event_loop().time() * 1000
+        now_ms = int(asyncio.get_event_loop().time() * 1000)
         if now_ms < self._block_until:
             if self._connected:
                 await self.async_disconnect()
@@ -156,12 +157,14 @@ class ThermometerCoordinator:
                 success = await self.device.async_connect()
                 if not success:
                     self._connecting = False
-        except Exception:
+                # Если успешно, _connecting сбросится в _handle_update
+        except Exception as e:
+            _LOGGER.debug(f"Connection attempt failed: {e}")
             self._connecting = False
     
     async def async_stop_thermometer(self) -> None:
         """Stop thermometer for 3.5 minutes."""
-        now_ms = asyncio.get_event_loop().time() * 1000
+        now_ms = int(asyncio.get_event_loop().time() * 1000)
         self._block_until = now_ms + BLOCK_DURATION
         
         if self.device:
@@ -169,6 +172,7 @@ class ThermometerCoordinator:
             if self.device.connected:
                 await self.device.async_disconnect()
         
+        # Обновляем статус сенсора
         async_dispatcher_send(
             self.hass, f"{DOMAIN}_{self.entry_id}_update", "blocked", None
         )
@@ -186,8 +190,9 @@ class ThermometerCoordinator:
             self._cancel_scan()
             self._cancel_scan = None
         
-        if self.device and self.device.connected:
-            await self.device.async_disconnect()
+        if self.device:
+            if self.device.connected:
+                await self.device.async_disconnect()
             self.device = None
     
     @property
@@ -202,8 +207,8 @@ class ThermometerCoordinator:
     
     @property
     def connected(self) -> bool:
-        """Connection status."""
-        now_ms = asyncio.get_event_loop().time() * 1000
+        """Connection status (respects blocking)."""
+        now_ms = int(asyncio.get_event_loop().time() * 1000)
         if now_ms < self._block_until:
             return False
         return self._connected
@@ -211,5 +216,5 @@ class ThermometerCoordinator:
     @property
     def blocked(self) -> bool:
         """Blocked status."""
-        now_ms = asyncio.get_event_loop().time() * 1000
+        now_ms = int(asyncio.get_event_loop().time() * 1000)
         return now_ms < self._block_until
