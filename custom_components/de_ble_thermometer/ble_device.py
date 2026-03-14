@@ -88,22 +88,20 @@ class RelsibWT50:
         try:
             # Проверяем размер данных
             if len(data) != 1:
-                _LOGGER.debug(f"Battery data length: {len(data)}")
                 return
             
             battery = data[0]
-            _LOGGER.debug(f"Raw battery value: {battery}")
             
-            # Проверяем, что значение в разумных пределах
+            # Проверяем, что значение в разумных пределах (0-100%)
             if 0 <= battery <= 100:
-                self._battery = battery
-                if self._callback:
-                    self._callback("battery", battery)
-            else:
-                _LOGGER.debug(f"Battery out of range: {battery}")
-                
-        except Exception as e:
-            _LOGGER.debug(f"Battery error: {e}")
+                # Обновляем только если значение изменилось или это первое значение
+                if self._battery != battery:
+                    self._battery = battery
+                    if self._callback:
+                        self._callback("battery", battery)
+            
+        except Exception:
+            pass
     
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
