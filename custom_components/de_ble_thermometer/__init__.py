@@ -129,7 +129,6 @@ class ThermometerCoordinator:
         elif source == "disconnected":
             self._connected = False
             self._connecting = False
-            # НЕ обнуляем данные, только отправляем статус
             async_dispatcher_send(
                 self.hass, f"{DOMAIN}_{self.entry_id}_update", "disconnected", None
             )
@@ -157,9 +156,7 @@ class ThermometerCoordinator:
                 success = await self.device.async_connect()
                 if not success:
                     self._connecting = False
-                # Если успешно, _connecting сбросится в _handle_update
-        except Exception as e:
-            _LOGGER.debug(f"Connection attempt failed: {e}")
+        except Exception:
             self._connecting = False
     
     async def async_stop_thermometer(self) -> None:
@@ -172,7 +169,6 @@ class ThermometerCoordinator:
             if self.device.connected:
                 await self.device.async_disconnect()
         
-        # Обновляем статус сенсора
         async_dispatcher_send(
             self.hass, f"{DOMAIN}_{self.entry_id}_update", "blocked", None
         )
