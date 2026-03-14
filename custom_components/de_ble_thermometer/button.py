@@ -33,6 +33,8 @@ class StopThermometerButton(ButtonEntity):
     _attr_name = "Stop Thermometer"
     _attr_icon = "mdi:stop-circle"
     _attr_should_poll = False
+    # Кнопка всегда доступна
+    _attr_available = True
 
     def __init__(self, coordinator, entry):
         """Initialize the button."""
@@ -66,8 +68,3 @@ class StopThermometerButton(ButtonEntity):
     async def async_press(self) -> None:
         """Handle the button press."""
         await self.coordinator.async_stop_thermometer()
-    
-    @property
-    def available(self) -> bool:
-        """Return if button is available."""
-        return not self.coordinator.blocked and self.coordinator.connected
