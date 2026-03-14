@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import struct
+import math
 from typing import Optional, Callable, Any, Union
 
 from bleak import BleakClient, BleakScanner
@@ -46,26 +46,29 @@ class RelsibWT50:
     def _temp_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle temperature notifications."""
         try:
+            # Проверяем размер данных как в ESPHome конфиге
             if len(data) == 5:
                 flags = data[0]
                 fahrenheit = (flags & 0x01) == 0x01
                 
-                # IEEE 11073 32-bit float format
-                # Байты 1-4 содержат 32-битное значение
-                mantissa = struct.unpack_from('<I', data[1:5])[0] & 0x00FFFFFF
-                exponent = struct.unpack_from('<b', data[4:5])[0]  # signed byte
+                # Извлекаем мантиссу (24 бита) как в ESPHome
+                mantissa = (data[1] | (data[2] << 8) | (data[3] << 16))
+                exponent = data[4]
+                
+                # Преобразуем exponent из signed byte
+                if exponent >= 128:  # отрицательное число
+                    exponent = exponent - 256
                 
                 # Вычисляем температуру
-                temperature = mantissa * (10 ** exponent)
+                temperature = mantissa * math.pow(10, exponent)
                 
-                # Просто берем значение как есть, без лишних преобразований
                 if fahrenheit:
                     temperature = (temperature - 32) * 5.0 / 9.0
                 
                 # Округляем до 1 знака
                 temperature = round(temperature, 1)
                 
-                # Проверяем, что температура в разумных пределах
+                # Проверяем разумный диапазон для температуры тела
                 if 25.0 <= temperature <= 45.0:
                     self._temperature = temperature
                     if self._callback:
@@ -128,7 +131,8 @@ class RelsibWT50:
             
             return True
             
-        except Exception:
+        except Exception as e:
+            _LOGGER.debug(f"Connection error: {e}")
             self.client = None
             return False
     
