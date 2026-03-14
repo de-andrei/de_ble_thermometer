@@ -33,8 +33,7 @@ class StopThermometerButton(ButtonEntity):
     _attr_name = "Stop Thermometer"
     _attr_icon = "mdi:stop-circle"
     _attr_should_poll = False
-    # Кнопка всегда доступна
-    _attr_available = True
+    _attr_available = True  # Кнопка всегда доступна
 
     def __init__(self, coordinator, entry):
         """Initialize the button."""
