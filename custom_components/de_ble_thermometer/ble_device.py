@@ -50,28 +50,41 @@ class RelsibWT50:
                 flags = data[0]
                 fahrenheit = (flags & 0x01) == 0x01
                 
-                mantissa = struct.unpack_from('<I', data[1:5] + b'\x00')[0] & 0xFFFFFF
-                exponent = data[4]
+                # IEEE 11073 32-bit float format
+                # Байты 1-4 содержат 32-битное значение
+                mantissa = struct.unpack_from('<I', data[1:5])[0] & 0x00FFFFFF
+                exponent = struct.unpack_from('<b', data[4:5])[0]  # signed byte
                 
+                # Вычисляем температуру
                 temperature = mantissa * (10 ** exponent)
                 
+                # Просто берем значение как есть, без лишних преобразований
                 if fahrenheit:
                     temperature = (temperature - 32) * 5.0 / 9.0
                 
-                self._temperature = temperature
-                if self._callback:
-                    self._callback("temperature", round(temperature, 1))
+                # Округляем до 1 знака
+                temperature = round(temperature, 1)
+                
+                # Проверяем, что температура в разумных пределах
+                if 25.0 <= temperature <= 45.0:
+                    self._temperature = temperature
+                    if self._callback:
+                        self._callback("temperature", temperature)
+                else:
+                    _LOGGER.debug(f"Temperature out of range: {temperature}")
                     
-        except Exception:
-            pass
+        except Exception as e:
+            _LOGGER.debug(f"Error parsing temperature: {e}")
     
     def _battery_notification_handler(self, sender: int, data: bytearray) -> None:
         """Handle battery notifications."""
         try:
             if len(data) == 1:
-                self._battery = data[0]
-                if self._callback:
-                    self._callback("battery", self._battery)
+                battery = data[0]
+                if 0 <= battery <= 100:
+                    self._battery = battery
+                    if self._callback:
+                        self._callback("battery", battery)
         except Exception:
             pass
     
