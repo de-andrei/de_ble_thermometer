@@ -7,6 +7,7 @@ from typing import Optional, Callable, Any, Union
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
+from bleak_retry_connector import establish_connection, BleakClientWithServiceCache
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.WARNING)
@@ -33,12 +34,13 @@ class RelsibWT50:
             self.address = address_or_ble_device
             self.ble_device = None
             
-        self.client: Optional[BleakClient] = None
+        self.client: Optional[BleakClientWithServiceCache] = None
         self._temperature: float = 0.0
         self._battery: int = 0
         self._block_until: int = 0
         self._callback: Optional[Callable[[str, Any], None]] = None
         self._battery_read_task: Optional[asyncio.Task] = None
+        self._disconnect_called = False
         
     def set_callback(self, callback: Callable[[str, Any], None]) -> None:
         """Set callback for data updates."""
@@ -116,29 +118,41 @@ class RelsibWT50:
     
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
+        _LOGGER.debug("Device %s disconnected", self.address)
         self.client = None
         if self._battery_read_task:
             self._battery_read_task.cancel()
             self._battery_read_task = None
-        if self._callback:
+        if self._callback and not self._disconnect_called:
             self._callback("disconnected", None)
     
     async def async_connect(self) -> bool:
         """Connect to thermometer and enable notifications."""
+        if self.client and self.client.is_connected:
+            return True
+            
+        self._disconnect_called = False
+        
         try:
             if not self.ble_device:
                 self.ble_device = await BleakScanner.find_device_by_address(
                     self.address, timeout=3.0
                 )
                 if not self.ble_device:
+                    _LOGGER.debug("Device %s not found", self.address)
                     return False
             
-            self.client = BleakClient(
-                self.ble_device,
-                disconnected_callback=self._disconnected_callback
-            )
+            _LOGGER.debug("Connecting to %s", self.address)
             
-            await self.client.connect(timeout=8.0)
+            # Используем establish_connection из bleak-retry-connector
+            self.client = await establish_connection(
+                BleakClientWithServiceCache,
+                self.ble_device,
+                self.address,
+                self._disconnected_callback,
+                max_attempts=3,
+                use_services_cache=True,
+            )
             
             # Подписываемся на уведомления температуры
             await self.client.start_notify(
@@ -175,12 +189,15 @@ class RelsibWT50:
             
             return True
             
-        except Exception:
+        except Exception as e:
+            _LOGGER.debug("Connection failed: %s", e)
             self.client = None
             return False
     
     async def async_disconnect(self) -> None:
         """Disconnect from thermometer."""
+        self._disconnect_called = True
+        
         if self._battery_read_task:
             self._battery_read_task.cancel()
             self._battery_read_task = None
