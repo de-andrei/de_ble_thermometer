@@ -16,5 +16,5 @@ BATTERY_CHAR_UUID = "00002a19-0000-1000-8000-00805f9b34fb"     # Battery Level
 
 # Update intervals
 SCAN_INTERVAL = timedelta(seconds=45)
-CONNECT_TIMEOUT = 15
+CONNECT_TIMEOUT = 10
 BLOCK_DURATION = 210000  # 3.5 minutes in milliseconds
